@@ -13,15 +13,17 @@ class AFCtrigger:
 
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
+        self.AFC = self.printer.lookup_object('AFC')
+        self.reactor = self.AFC.reactor
+        self.gcode = self.AFC.gcode
+
         self.name = config.get_name().split(' ')[-1]
         self.turtleneck = False
         self.belay = False
         self.last_state = False
         self.enable = False
         self.current = ''
-        self.AFC = self.printer.lookup_object('AFC')
+
         self.debug = config.getboolean("debug", False)
         self.buttons = self.printer.load_object(config, "buttons")
 
@@ -66,8 +68,8 @@ class AFCtrigger:
             raise error( msg )
 
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
-
         self.gcode.register_mux_command("QUERY_BUFFER", "BUFFER", self.name, self.cmd_QUERY_BUFFER, desc=self.cmd_QUERY_BUFFER_help)
+        self.gcode.register_mux_command("SET_BUFFER_VELOCITY", "BUFFER", self.name, self.cmd_SET_BUFFER_VELOCITY, desc=self.cmd_SET_BUFFER_VELOCITY_help)
 
         # Belay Buffer
         if self.belay:
@@ -160,27 +162,23 @@ class AFCtrigger:
     def advance_callback(self, eventime, state):
         if self.printer.state_message == 'Printer is ready' and self.enable:
             CUR_LANE = self.printer.lookup_object('AFC_stepper ' + self.AFC.current)
-            CUR_EXTRUDER = self.printer.lookup_object('AFC_extruder ' + CUR_LANE.extruder_name)
-            if CUR_EXTRUDER.tool_start_state:
-                if self.AFC.current != None and state:
-                    CUR_LANE.assist(CUR_LANE.calculate_pwm_value(self.AFC.gcode_move.speed * (self.velocity / 10)))
-                    self.reactor.pause(self.reactor.monotonic() + 1)
-                    CUR_LANE.assist(0)
-                    self.set_multiplier( self.multiplier_low )
-                    if self.debug: self.gcode.respond_info("Buffer Triggered State: Advanced")
+            if self.AFC.current != None and state:
+                CUR_LANE.assist(CUR_LANE.calculate_pwm_value(self.AFC.gcode_move.speed * (self.velocity / 10)))
+                self.reactor.pause(self.reactor.monotonic() + 1)
+                CUR_LANE.assist(0)
+                self.set_multiplier( self.multiplier_low )
+                if self.debug: self.gcode.respond_info("Buffer Triggered State: Advanced")
         self.last_state = ADVANCE_STATE_NAME
 
     def trailing_callback(self, eventime, state):
         if self.printer.state_message == 'Printer is ready' and self.enable:
             CUR_LANE = self.printer.lookup_object('AFC_stepper ' + self.AFC.current)
-            CUR_EXTRUDER = self.printer.lookup_object('AFC_extruder ' + CUR_LANE.extruder_name)
-            if CUR_EXTRUDER.tool_start_state:
-                if self.AFC.current != None and state:
-                    CUR_LANE.assist(CUR_LANE.calculate_pwm_value(self.AFC.gcode_move.speed * (self.velocity / 10)))
-                    self.reactor.pause(self.reactor.monotonic() + 1)
-                    CUR_LANE.assist(0)
-                    self.set_multiplier( self.multiplier_high )
-                    if self.debug: self.gcode.respond_info("Buffer Triggered State: Trailing")
+            if self.AFC.current != None and state:
+                CUR_LANE.assist(CUR_LANE.calculate_pwm_value(self.AFC.gcode_move.speed * (self.velocity / 10)))
+                self.reactor.pause(self.reactor.monotonic() + 1)
+                CUR_LANE.assist(0)
+                self.set_multiplier( self.multiplier_high )
+                if self.debug: self.gcode.respond_info("Buffer Triggered State: Trailing")
         self.last_state = TRAILING_STATE_NAME
 
     def buffer_status(self):
@@ -305,6 +303,26 @@ class AFCtrigger:
                 state_info += ("\n{} Rotation distance: {}".format(LANE.name.upper(), rotation_dist))
 
         self.gcode.respond_info("{} : {}".format(self.name, state_info))
+
+    cmd_SET_BUFFER_VELOCITY_help = "Set buffer velocity realtime for forward assist"
+    def cmd_SET_BUFFER_VELOCITY(self, gcmd):
+        """
+        Allows users to tweak buffer velocity setting while printing. This setting is not
+        saved in configuration. Please update your configuration file once you find a velocity that
+        works for your setup.
+
+        Usage: SET_BUFFER_VELOCITY BUFFER=<buffer_name> VELOCITY=<value>
+        Example: SET_BUFFER_VELOCITY BUFFER=TN2 VELOCITY=100
+
+        Behavior:
+            - Updates the value that the espooler use for forward assist during printing.
+            - Setting value to zero disables forward assist during printing.
+            - Velocity is not saved to configuration file, needs to be manually updated.
+        """
+        old_velocity = self.velocity
+        self.velocity = gcmd.get_float('VELOCITY', 0.0)
+        self.gcode.respond_info("VELOCITY for {} was updated from {} to {}".format(self.name, old_velocity, self.velocity))
+
 
 def load_config_prefix(config):
     return AFCtrigger(config)
